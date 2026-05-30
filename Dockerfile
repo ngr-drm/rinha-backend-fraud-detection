@@ -14,12 +14,13 @@ FROM eclipse-temurin:21-jdk AS preprocess
 WORKDIR /preprocess
 
 # Copia o script de pré-processamento e os dados
-COPY preprocess/PreprocessVectors.java ./
-COPY resources/references.json.gz ./
+COPY preprocess/PreprocessVectors.java ./PreprocessVectors.java
+COPY resources/references.json.gz ./references.json.gz
 
-# Compila e executa o pré-processador
-RUN javac PreprocessVectors.java && \
-    java PreprocessVectors references.json.gz /data
+# Cria diretório de output e executa o pré-processador
+# Usando java source-file mode com heap aumentado para processar 3M vetores
+RUN mkdir -p /data && \
+    java -Xmx4g -Xms1g PreprocessVectors.java references.json.gz /data
 
 # Output: /data/vectors.bin e /data/vptree.bin
 

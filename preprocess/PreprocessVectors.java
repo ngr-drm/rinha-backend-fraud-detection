@@ -1,5 +1,3 @@
-package preprocess;
-
 import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -17,8 +15,7 @@ import java.util.zip.GZIPInputStream;
  * - vectors.bin: vetores em formato binário (float[14] + byte label)
  * - vptree.bin: VP-Tree serializada para busca k-NN
  *
- * Executar: java preprocess/PreprocessVectors.java <input.json.gz> <output-dir>
- * Exemplo:  java preprocess/PreprocessVectors.java resources/references.json.gz data/
+ * Executar: java PreprocessVectors.java <input.json.gz> <output-dir>
  */
 public class PreprocessVectors {
 
@@ -44,93 +41,134 @@ public class PreprocessVectors {
 
         Files.createDirectories(Path.of(outputDir));
 
-        System.out.println("=== Pré-processador de Vetores - Rinha de Backend 2026 ===");
+        System.out.println("=== Pre-processador de Vetores - Rinha de Backend 2026 ===");
         System.out.println("Input: " + inputPath);
         System.out.println("Output dir: " + outputDir);
+        System.out.flush();
 
         // 1. Carrega vetores do JSON
         System.out.println("\n[1/4] Carregando vetores de " + inputPath + "...");
+        System.out.flush();
         long startLoad = System.currentTimeMillis();
-        List<VectorRecord> records = loadVectors(inputPath);
+        List<VectorRecord> records = loadVectorsStreaming(inputPath);
         System.out.println("      " + records.size() + " vetores carregados em " + (System.currentTimeMillis() - startLoad) + "ms");
+        System.out.flush();
 
         // 2. Escreve vectors.bin
         String vectorsPath = outputDir + "/vectors.bin";
         System.out.println("\n[2/4] Escrevendo " + vectorsPath + "...");
+        System.out.flush();
         long startWrite = System.currentTimeMillis();
         writeVectorsBinary(records, vectorsPath);
         System.out.println("      Escrito em " + (System.currentTimeMillis() - startWrite) + "ms");
+        System.out.flush();
 
-        // 3. Constrói VP-Tree
+        // 3. Constroi VP-Tree
         System.out.println("\n[3/4] Construindo VP-Tree com " + records.size() + " vetores...");
+        System.out.flush();
         long startTree = System.currentTimeMillis();
-        VPNode root = buildVPTree(records, 0, records.size());
-        System.out.println("      Construída em " + (System.currentTimeMillis() - startTree) + "ms");
+
+        // Cria array de indices para construcao iterativa
+        int[] indices = new int[records.size()];
+        for (int i = 0; i < indices.length; i++) {
+            indices[i] = i;
+        }
+
+        VPNode root = buildVPTreeIterative(records, indices);
+        System.out.println("      Construida em " + (System.currentTimeMillis() - startTree) + "ms");
+        System.out.flush();
 
         // 4. Serializa VP-Tree
         String vptreePath = outputDir + "/vptree.bin";
         System.out.println("\n[4/4] Serializando VP-Tree em " + vptreePath + "...");
+        System.out.flush();
         long startSerialize = System.currentTimeMillis();
         int nodeCount = serializeVPTree(root, vptreePath);
-        System.out.println("      " + nodeCount + " nós serializados em " + (System.currentTimeMillis() - startSerialize) + "ms");
+        System.out.println("      " + nodeCount + " nos serializados em " + (System.currentTimeMillis() - startSerialize) + "ms");
+        System.out.flush();
 
         // Resumo
         long vectorsSize = Files.size(Path.of(vectorsPath));
         long vptreeSize = Files.size(Path.of(vptreePath));
-        System.out.println("\n=== Concluído ===");
+        System.out.println("\n=== Concluido ===");
         System.out.println("vectors.bin: " + formatBytes(vectorsSize));
         System.out.println("vptree.bin:  " + formatBytes(vptreeSize));
         System.out.println("Total:       " + formatBytes(vectorsSize + vptreeSize));
+        System.out.flush();
     }
 
     /**
-     * Carrega vetores do arquivo JSON (gzipado ou não)
+     * Carrega vetores do arquivo JSON usando streaming (baixo uso de memoria)
      */
-    private static List<VectorRecord> loadVectors(String path) throws IOException {
-        List<VectorRecord> records = new ArrayList<>();
+    private static List<VectorRecord> loadVectorsStreaming(String path) throws IOException {
+        List<VectorRecord> records = new ArrayList<>(3_100_000);
 
         InputStream input = Files.newInputStream(Path.of(path));
         if (path.endsWith(".gz")) {
-            input = new GZIPInputStream(input);
+            input = new GZIPInputStream(input, 65536);
         }
 
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(input))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line);
-            }
-            String json = sb.toString();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(input), 1024 * 1024)) {
+            StringBuilder sb = new StringBuilder(500);
+            int ch;
+            int braceCount = 0;
+            boolean inObject = false;
 
-            // Parser JSON manual simples (evita dependências)
-            // Formato: [{"vector": [...], "label": "fraud"}, ...]
-            int idx = 0;
-            while (true) {
-                int vectorStart = json.indexOf("\"vector\"", idx);
-                if (vectorStart == -1) break;
+            while ((ch = reader.read()) != -1) {
+                char c = (char) ch;
 
-                int arrayStart = json.indexOf('[', vectorStart);
-                int arrayEnd = json.indexOf(']', arrayStart);
-                String vectorStr = json.substring(arrayStart + 1, arrayEnd);
+                if (c == '{') {
+                    braceCount++;
+                    inObject = true;
+                    sb.append(c);
+                } else if (c == '}') {
+                    braceCount--;
+                    sb.append(c);
 
-                float[] vector = parseFloatArray(vectorStr);
-
-                int labelStart = json.indexOf("\"label\"", arrayEnd);
-                int colonPos = json.indexOf(':', labelStart);
-                int quoteStart = json.indexOf('"', colonPos);
-                int quoteEnd = json.indexOf('"', quoteStart + 1);
-                String label = json.substring(quoteStart + 1, quoteEnd);
-
-                records.add(new VectorRecord(records.size(), vector, "fraud".equals(label)));
-                idx = quoteEnd;
-
-                if (records.size() % 500000 == 0) {
-                    System.out.println("      ... " + records.size() + " vetores carregados");
+                    if (braceCount == 0 && inObject) {
+                        // Objeto completo
+                        String obj = sb.toString();
+                        VectorRecord record = parseObject(obj, records.size());
+                        if (record != null) {
+                            records.add(record);
+                            if (records.size() % 500000 == 0) {
+                                System.out.println("      ... " + records.size() + " vetores carregados");
+                                System.out.flush();
+                            }
+                        }
+                        sb.setLength(0);
+                        inObject = false;
+                    }
+                } else if (inObject) {
+                    sb.append(c);
                 }
             }
         }
 
         return records;
+    }
+
+    /**
+     * Parse de um objeto JSON individual
+     */
+    private static VectorRecord parseObject(String obj, int index) {
+        try {
+            // Encontra o array de vector
+            int vectorStart = obj.indexOf('[');
+            int vectorEnd = obj.indexOf(']');
+            if (vectorStart == -1 || vectorEnd == -1) return null;
+
+            String vectorStr = obj.substring(vectorStart + 1, vectorEnd);
+            float[] vector = parseFloatArray(vectorStr);
+            if (vector.length != VECTOR_DIMENSIONS) return null;
+
+            // Encontra o label
+            boolean isFraud = obj.contains("\"fraud\"");
+
+            return new VectorRecord(index, vector, isFraud);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private static float[] parseFloatArray(String str) {
@@ -143,8 +181,7 @@ public class PreprocessVectors {
     }
 
     /**
-     * Escreve vetores em formato binário
-     * Formato: float[14] (56 bytes) + byte label (1 byte) = 57 bytes por registro
+     * Escreve vetores em formato binario
      */
     private static void writeVectorsBinary(List<VectorRecord> records, String path) throws IOException {
         try (FileChannel channel = FileChannel.open(Path.of(path),
@@ -168,7 +205,6 @@ public class PreprocessVectors {
                 }
             }
 
-            // Flush remaining
             if (buffer.position() > 0) {
                 buffer.flip();
                 channel.write(buffer);
@@ -177,95 +213,103 @@ public class PreprocessVectors {
     }
 
     /**
-     * Constrói VP-Tree recursivamente
+     * Constroi VP-Tree de forma iterativa (evita stack overflow)
      */
-    private static VPNode buildVPTree(List<VectorRecord> records, int start, int end) {
-        if (start >= end) {
-            return null;
-        }
+    private static VPNode buildVPTreeIterative(List<VectorRecord> records, int[] indices) {
+        if (indices.length == 0) return null;
 
-        if (end - start == 1) {
-            // Nó folha
-            return new VPNode(records.get(start).index, 0f, null, null);
-        }
+        // Usa uma pilha explicita para evitar recursao profunda
+        Deque<BuildTask> stack = new ArrayDeque<>();
+        Map<BuildTask, VPNode> results = new HashMap<>();
 
-        // Escolhe vantage point (primeiro elemento do range)
-        int vpIdx = start;
-        VectorRecord vp = records.get(vpIdx);
+        BuildTask rootTask = new BuildTask(indices, null, false);
+        stack.push(rootTask);
 
-        // Calcula distâncias de todos os outros pontos ao vantage point
-        List<DistanceRecord> distances = new ArrayList<>(end - start - 1);
-        for (int i = start + 1; i < end; i++) {
-            float dist = squaredEuclideanDistance(vp.vector, records.get(i).vector);
-            distances.add(new DistanceRecord(i, dist));
-        }
+        Random random = new Random(42); // Seed fixo para reproducibilidade
 
-        if (distances.isEmpty()) {
-            return new VPNode(vp.index, 0f, null, null);
-        }
+        while (!stack.isEmpty()) {
+            BuildTask task = stack.peek();
 
-        // Ordena por distância e encontra mediana
-        distances.sort(Comparator.comparingDouble(d -> d.distance));
-        int medianIdx = distances.size() / 2;
-        float threshold = distances.get(medianIdx).distance;
+            if (task.indices.length == 0) {
+                results.put(task, null);
+                stack.pop();
+                continue;
+            }
 
-        // Particiona: inside (dist <= threshold) e outside (dist > threshold)
-        List<VectorRecord> inside = new ArrayList<>();
-        List<VectorRecord> outside = new ArrayList<>();
+            if (task.indices.length == 1) {
+                VPNode node = new VPNode(task.indices[0], 0f, null, null);
+                results.put(task, node);
+                stack.pop();
+                continue;
+            }
 
-        for (int i = 0; i < distances.size(); i++) {
-            int recordIdx = distances.get(i).originalIndex;
-            if (i < medianIdx) {
-                inside.add(records.get(recordIdx));
-            } else {
-                outside.add(records.get(recordIdx));
+            // Verifica se os filhos ja foram processados
+            if (task.insideTask != null && task.outsideTask != null
+                && results.containsKey(task.insideTask) && results.containsKey(task.outsideTask)) {
+                VPNode inside = results.get(task.insideTask);
+                VPNode outside = results.get(task.outsideTask);
+                VPNode node = new VPNode(task.vpIndex, task.threshold, inside, outside);
+                results.put(task, node);
+                stack.pop();
+                continue;
+            }
+
+            // Primeira visita: calcular particao
+            if (task.vpIndex == -1) {
+                // Escolhe vantage point (aleatorio para melhor balanceamento)
+                int vpLocalIdx = random.nextInt(task.indices.length);
+                task.vpIndex = task.indices[vpLocalIdx];
+                float[] vpVector = records.get(task.vpIndex).vector;
+
+                // Calcula distancias
+                float[] distances = new float[task.indices.length - 1];
+                int[] otherIndices = new int[task.indices.length - 1];
+                int j = 0;
+                for (int i = 0; i < task.indices.length; i++) {
+                    if (i != vpLocalIdx) {
+                        otherIndices[j] = task.indices[i];
+                        distances[j] = squaredEuclideanDistance(vpVector, records.get(task.indices[i]).vector);
+                        j++;
+                    }
+                }
+
+                if (otherIndices.length == 0) {
+                    VPNode node = new VPNode(task.vpIndex, 0f, null, null);
+                    results.put(task, node);
+                    stack.pop();
+                    continue;
+                }
+
+                // Ordena por distancia usando indices
+                Integer[] sortedIdx = new Integer[distances.length];
+                for (int i = 0; i < sortedIdx.length; i++) sortedIdx[i] = i;
+                final float[] finalDistances = distances;
+                Arrays.sort(sortedIdx, (a, b) -> Float.compare(finalDistances[a], finalDistances[b]));
+
+                int medianIdx = sortedIdx.length / 2;
+                task.threshold = distances[sortedIdx[medianIdx]];
+
+                // Particiona
+                int[] insideIndices = new int[medianIdx];
+                int[] outsideIndices = new int[sortedIdx.length - medianIdx];
+
+                for (int i = 0; i < medianIdx; i++) {
+                    insideIndices[i] = otherIndices[sortedIdx[i]];
+                }
+                for (int i = medianIdx; i < sortedIdx.length; i++) {
+                    outsideIndices[i - medianIdx] = otherIndices[sortedIdx[i]];
+                }
+
+                // Cria tarefas filhas
+                task.insideTask = new BuildTask(insideIndices, task, false);
+                task.outsideTask = new BuildTask(outsideIndices, task, true);
+
+                stack.push(task.outsideTask);
+                stack.push(task.insideTask);
             }
         }
 
-        // Reconstrói listas para recursão
-        VPNode insideNode = inside.isEmpty() ? null : buildVPTreeFromList(inside);
-        VPNode outsideNode = outside.isEmpty() ? null : buildVPTreeFromList(outside);
-
-        return new VPNode(vp.index, threshold, insideNode, outsideNode);
-    }
-
-    private static VPNode buildVPTreeFromList(List<VectorRecord> records) {
-        if (records.isEmpty()) {
-            return null;
-        }
-
-        if (records.size() == 1) {
-            return new VPNode(records.get(0).index, 0f, null, null);
-        }
-
-        VectorRecord vp = records.get(0);
-
-        List<DistanceRecord> distances = new ArrayList<>(records.size() - 1);
-        for (int i = 1; i < records.size(); i++) {
-            float dist = squaredEuclideanDistance(vp.vector, records.get(i).vector);
-            distances.add(new DistanceRecord(i, dist));
-        }
-
-        distances.sort(Comparator.comparingDouble(d -> d.distance));
-        int medianIdx = distances.size() / 2;
-        float threshold = distances.get(medianIdx).distance;
-
-        List<VectorRecord> inside = new ArrayList<>();
-        List<VectorRecord> outside = new ArrayList<>();
-
-        for (int i = 0; i < distances.size(); i++) {
-            int recordIdx = distances.get(i).originalIndex;
-            if (i < medianIdx) {
-                inside.add(records.get(recordIdx));
-            } else {
-                outside.add(records.get(recordIdx));
-            }
-        }
-
-        VPNode insideNode = inside.isEmpty() ? null : buildVPTreeFromList(inside);
-        VPNode outsideNode = outside.isEmpty() ? null : buildVPTreeFromList(outside);
-
-        return new VPNode(vp.index, threshold, insideNode, outsideNode);
+        return results.get(rootTask);
     }
 
     private static float squaredEuclideanDistance(float[] a, float[] b) {
@@ -278,15 +322,16 @@ public class PreprocessVectors {
     }
 
     /**
-     * Serializa VP-Tree em formato binário
-     * Usa BFS para garantir offsets contíguos
+     * Serializa VP-Tree em formato binario usando BFS
      */
     private static int serializeVPTree(VPNode root, String path) throws IOException {
         if (root == null) {
+            // Cria arquivo vazio
+            Files.write(Path.of(path), new byte[0]);
             return 0;
         }
 
-        // BFS para coletar nós e calcular offsets
+        // BFS para coletar nos
         List<VPNode> nodes = new ArrayList<>();
         Queue<VPNode> queue = new LinkedList<>();
         queue.add(root);
@@ -298,28 +343,39 @@ public class PreprocessVectors {
             if (node.outside != null) queue.add(node.outside);
         }
 
-        // Mapeia nó -> offset
-        Map<VPNode, Integer> offsetMap = new HashMap<>();
+        // Mapeia no -> offset
+        Map<VPNode, Integer> offsetMap = new IdentityHashMap<>();
         for (int i = 0; i < nodes.size(); i++) {
             offsetMap.put(nodes.get(i), i * NODE_SIZE_BYTES);
         }
 
-        // Escreve
+        // Escreve em chunks para evitar OutOfMemory
         try (FileChannel channel = FileChannel.open(Path.of(path),
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
 
-            ByteBuffer buffer = ByteBuffer.allocate(NODE_SIZE_BYTES * nodes.size());
+            int chunkSize = 100000;
+            ByteBuffer buffer = ByteBuffer.allocate(NODE_SIZE_BYTES * Math.min(chunkSize, nodes.size()));
             buffer.order(ByteOrder.LITTLE_ENDIAN);
 
+            int count = 0;
             for (VPNode node : nodes) {
                 buffer.putInt(node.vpIndex);
                 buffer.putFloat(node.threshold);
                 buffer.putInt(node.inside != null ? offsetMap.get(node.inside) : OFFSET_NULL);
                 buffer.putInt(node.outside != null ? offsetMap.get(node.outside) : OFFSET_NULL);
+
+                count++;
+                if (count % chunkSize == 0) {
+                    buffer.flip();
+                    channel.write(buffer);
+                    buffer.clear();
+                }
             }
 
-            buffer.flip();
-            channel.write(buffer);
+            if (buffer.position() > 0) {
+                buffer.flip();
+                channel.write(buffer);
+            }
         }
 
         return nodes.size();
@@ -331,9 +387,34 @@ public class PreprocessVectors {
         return String.format("%.2f MB", bytes / (1024.0 * 1024));
     }
 
-    // Records
-    record VectorRecord(int index, float[] vector, boolean isFraud) {}
-    record DistanceRecord(int originalIndex, float distance) {}
+    // Classes auxiliares
+    static class VectorRecord {
+        final int index;
+        final float[] vector;
+        final boolean isFraud;
+
+        VectorRecord(int index, float[] vector, boolean isFraud) {
+            this.index = index;
+            this.vector = vector;
+            this.isFraud = isFraud;
+        }
+    }
+
+    static class BuildTask {
+        final int[] indices;
+        final BuildTask parent;
+        final boolean isOutside;
+        int vpIndex = -1;
+        float threshold;
+        BuildTask insideTask;
+        BuildTask outsideTask;
+
+        BuildTask(int[] indices, BuildTask parent, boolean isOutside) {
+            this.indices = indices;
+            this.parent = parent;
+            this.isOutside = isOutside;
+        }
+    }
 
     static class VPNode {
         final int vpIndex;
@@ -349,4 +430,3 @@ public class PreprocessVectors {
         }
     }
 }
-
