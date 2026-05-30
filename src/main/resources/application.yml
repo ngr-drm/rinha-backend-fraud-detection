@@ -1,0 +1,41 @@
+spring:
+  application:
+    name: rb-fraud-detection
+
+  # Habilita Virtual Threads (Java 21)
+  threads:
+    virtual:
+      enabled: true
+
+  # Desabilita banner para startup mais rápido
+  main:
+    banner-mode: off
+
+  # Jackson otimizado
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+server:
+  port: 8080
+  # Undertow tuning para baixa latência
+  undertow:
+    threads:
+      io: 2
+      worker: 4
+    buffer-size: 1024
+    direct-buffers: true
+
+# Configurações customizadas
+app:
+  data:
+    vectors-path: /data/vectors.bin
+    vptree-path: /data/vptree.bin
+    mcc-risk-path: /data/mcc_risk.json
+
+logging:
+  level:
+    root: WARN
+    com.rb.fraud: INFO
+

@@ -1,0 +1,26 @@
+# Build
+target/
+*.jar
+*.class
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dados gerados (pré-processamento)
+data/vectors.bin
+data/vptree.bin
+
+# Logs
+*.log
+logs/
+
+# Docker
+.docker/
+
