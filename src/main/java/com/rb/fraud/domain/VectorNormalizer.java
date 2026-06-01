@@ -4,9 +4,8 @@ import com.rb.fraud.api.dto.FraudRequest;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.Map;
 
 /**
@@ -55,9 +54,9 @@ public class VectorNormalizer {
     public float[] normalize(FraudRequest request) {
         float[] vector = new float[14];
 
-        // Parse do timestamp
-        ZonedDateTime requestedAt = ZonedDateTime.parse(request.transaction().requestedAt())
-                .withZoneSameInstant(ZoneOffset.UTC);
+        // Parse leve do timestamp (Instant.parse é otimizado p/ ISO_INSTANT)
+        Instant requestedAt = Instant.parse(request.transaction().requestedAt());
+        LocalDateTime requestedAtUtc = LocalDateTime.ofInstant(requestedAt, ZoneOffset.UTC);
 
         // Índice 0: amount
         vector[0] = clamp(request.transaction().amount() / MAX_AMOUNT);
@@ -72,19 +71,17 @@ public class VectorNormalizer {
             : 0f;
 
         // Índice 3: hour_of_day (0-23 UTC, dividido por 23)
-        vector[3] = requestedAt.getHour() / 23f;
+        vector[3] = requestedAtUtc.getHour() / 23f;
 
         // Índice 4: day_of_week (Mon=0, Sun=6, dividido por 6)
-        // DayOfWeek: MONDAY=1, SUNDAY=7 → convertemos para Mon=0, Sun=6
-        int dayOfWeek = requestedAt.getDayOfWeek().getValue() - 1; // 0-6
+        int dayOfWeek = requestedAtUtc.getDayOfWeek().getValue() - 1; // 0-6
         vector[4] = dayOfWeek / 6f;
 
         // Índices 5 e 6: dependem de last_transaction
         if (request.lastTransaction() != null) {
             // Índice 5: minutes_since_last_tx
-            ZonedDateTime lastTxTime = ZonedDateTime.parse(request.lastTransaction().timestamp())
-                    .withZoneSameInstant(ZoneOffset.UTC);
-            long minutes = ChronoUnit.MINUTES.between(lastTxTime, requestedAt);
+            Instant lastTxTime = Instant.parse(request.lastTransaction().timestamp());
+            long minutes = (requestedAt.getEpochSecond() - lastTxTime.getEpochSecond()) / 60L;
             vector[5] = clamp(minutes / MAX_MINUTES);
 
             // Índice 6: km_from_last_tx

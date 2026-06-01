@@ -8,7 +8,6 @@ import org.springframework.stereotype.Component;
 import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
@@ -86,12 +85,9 @@ public class VectorStore {
         float[] vector = new float[VECTOR_DIMENSIONS];
         int offset = index * RECORD_SIZE_BYTES;
 
-        // Thread-safe: cada thread usa sua própria posição via slice
-        ByteBuffer slice = buffer.slice(offset, VECTOR_SIZE_BYTES);
-        slice.order(ByteOrder.LITTLE_ENDIAN);
-
+        // Leitura absoluta thread-safe e zero-alocação (sem slice())
         for (int i = 0; i < VECTOR_DIMENSIONS; i++) {
-            vector[i] = slice.getFloat();
+            vector[i] = buffer.getFloat(offset + i * BYTES_PER_FLOAT);
         }
 
         return vector;
@@ -124,21 +120,29 @@ public class VectorStore {
      * @return Distância euclidiana ao quadrado
      */
     public float squaredEuclideanDistance(int index, float[] query) {
-        if (buffer == null) {
-            throw new IllegalStateException("VectorStore não inicializado");
-        }
+        // HOT PATH: chamado N vezes por query k-NN.
+        // Usa leituras absolutas no MappedByteBuffer (zero-alocação, thread-safe).
+        final MappedByteBuffer buf = this.buffer;
+        final int offset = index * RECORD_SIZE_BYTES;
 
-        int offset = index * RECORD_SIZE_BYTES;
-        ByteBuffer slice = buffer.slice(offset, VECTOR_SIZE_BYTES);
-        slice.order(ByteOrder.LITTLE_ENDIAN);
+        // Loop unrolled para 14 dimensões (evita overhead de loop + permite SIMD do JIT)
+        float d0  = buf.getFloat(offset)      - query[0];
+        float d1  = buf.getFloat(offset + 4)  - query[1];
+        float d2  = buf.getFloat(offset + 8)  - query[2];
+        float d3  = buf.getFloat(offset + 12) - query[3];
+        float d4  = buf.getFloat(offset + 16) - query[4];
+        float d5  = buf.getFloat(offset + 20) - query[5];
+        float d6  = buf.getFloat(offset + 24) - query[6];
+        float d7  = buf.getFloat(offset + 28) - query[7];
+        float d8  = buf.getFloat(offset + 32) - query[8];
+        float d9  = buf.getFloat(offset + 36) - query[9];
+        float d10 = buf.getFloat(offset + 40) - query[10];
+        float d11 = buf.getFloat(offset + 44) - query[11];
+        float d12 = buf.getFloat(offset + 48) - query[12];
+        float d13 = buf.getFloat(offset + 52) - query[13];
 
-        float sum = 0f;
-        for (int i = 0; i < VECTOR_DIMENSIONS; i++) {
-            float diff = slice.getFloat() - query[i];
-            sum += diff * diff;
-        }
-
-        return sum;
+        return d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4 + d5*d5 + d6*d6
+             + d7*d7 + d8*d8 + d9*d9 + d10*d10 + d11*d11 + d12*d12 + d13*d13;
     }
 
     /**

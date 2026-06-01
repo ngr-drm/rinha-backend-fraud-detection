@@ -9,7 +9,6 @@ import org.springframework.stereotype.Component;
 import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
@@ -118,19 +117,17 @@ public class VPTree {
             return tau;
         }
 
-        // Lê o nó
-        ByteBuffer slice = treeBuffer.slice(nodeOffset, NODE_SIZE_BYTES);
-        slice.order(ByteOrder.LITTLE_ENDIAN);
+        // Leitura absoluta do nó (zero-alocação, thread-safe)
+        final MappedByteBuffer buf = this.treeBuffer;
+        int vpIndex        = buf.getInt(nodeOffset);
+        float threshold    = buf.getFloat(nodeOffset + 4);   // squared distance
+        int insideOffset   = buf.getInt(nodeOffset + 8);
+        int outsideOffset  = buf.getInt(nodeOffset + 12);
 
-        int vpIndex = slice.getInt();
-        float threshold = slice.getFloat();  // threshold já está em squared distance
-        int insideOffset = slice.getInt();
-        int outsideOffset = slice.getInt();
-
-        // Calcula distância ao vantage point (squared)
+        // Distância (squared) ao vantage point
         float distSq = vectorStore.squaredEuclideanDistance(vpIndex, query);
 
-        // Atualiza heap se este ponto é candidato
+        // Atualiza heap
         if (heap.size() < k) {
             heap.add(new Neighbor(vpIndex, distSq, vectorStore.isFraud(vpIndex)));
             if (heap.size() == k) {
@@ -142,40 +139,35 @@ public class VPTree {
             tau = heap.peek().distance;
         }
 
-        // Nó folha: retorna
+        // Folha
         if (insideOffset == OFFSET_NULL && outsideOffset == OFFSET_NULL) {
             return tau;
         }
 
-        // Decide qual subárvore visitar primeiro baseado na distância ao threshold
-        // threshold e distSq estão ambos em squared distance
+        // Pré-calcula sqrts uma única vez (regra do triângulo em espaço euclidiano linear)
+        // Critério exato: |sqrt(distSq) - sqrt(threshold)| < sqrt(tau)  → visitar lado oposto
+        float sqrtDist      = (float) Math.sqrt(distSq);
+        float sqrtThreshold = (float) Math.sqrt(threshold);
+
         if (distSq < threshold) {
-            // Query está dentro da esfera do vantage point - visita inside primeiro
+            // Visita inside primeiro
             if (insideOffset != OFFSET_NULL) {
                 tau = searchNode(insideOffset, query, k, heap, tau);
             }
-            // Precisa visitar outside se a esfera de busca (tau) cruza o threshold
-            // Condição: distSq + tau >= threshold (aproximação conservadora)
+            // Re-avalia poda do outside com tau possivelmente reduzido
             if (outsideOffset != OFFSET_NULL) {
-                // Para ser mais preciso: sqrt(distSq) + sqrt(tau) >= sqrt(threshold)
-                // Simplificação: sempre visitar se tau > 0 (garante resultado exato)
-                float sqrtDist = (float) Math.sqrt(distSq);
                 float sqrtTau = (float) Math.sqrt(tau);
-                float sqrtThreshold = (float) Math.sqrt(threshold);
                 if (sqrtDist + sqrtTau >= sqrtThreshold) {
                     tau = searchNode(outsideOffset, query, k, heap, tau);
                 }
             }
         } else {
-            // Query está fora da esfera - visita outside primeiro
+            // Visita outside primeiro
             if (outsideOffset != OFFSET_NULL) {
                 tau = searchNode(outsideOffset, query, k, heap, tau);
             }
-            // Precisa visitar inside se a esfera de busca cruza o threshold
             if (insideOffset != OFFSET_NULL) {
-                float sqrtDist = (float) Math.sqrt(distSq);
                 float sqrtTau = (float) Math.sqrt(tau);
-                float sqrtThreshold = (float) Math.sqrt(threshold);
                 if (sqrtDist - sqrtTau <= sqrtThreshold) {
                     tau = searchNode(insideOffset, query, k, heap, tau);
                 }
