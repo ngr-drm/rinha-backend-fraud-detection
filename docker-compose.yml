@@ -17,6 +17,7 @@ services:
   haproxy:
     image: haproxy:2.9-alpine
     hostname: haproxy
+    container_name: haproxy
     ports:
       - "9999:9999"
     volumes:
@@ -42,6 +43,7 @@ services:
       context: .
       dockerfile: Dockerfile
     hostname: api1
+    container_name: instance-1
     environment:
       # SerialGC é mais eficiente que G1 em heaps pequenos (<200MB)
       # -XX:+TieredCompilation -XX:TieredStopAtLevel=1 acelera startup
@@ -68,6 +70,7 @@ services:
       context: .
       dockerfile: Dockerfile
     hostname: api2
+    container_name: instance-2
     environment:
       # SerialGC é mais eficiente que G1 em heaps pequenos (<200MB)
       # -XX:+TieredCompilation -XX:TieredStopAtLevel=1 acelera startup

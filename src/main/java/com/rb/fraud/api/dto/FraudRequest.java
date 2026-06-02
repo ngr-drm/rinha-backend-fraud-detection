@@ -1,4 +1,4 @@
-cdpackage com.rb.fraud.api.dto;
+package com.rb.fraud.api.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
