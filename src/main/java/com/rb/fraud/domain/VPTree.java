@@ -51,6 +51,8 @@ public class VPTree {
     private MappedByteBuffer treeBuffer;
     private int nodeCount;
 
+    private final ThreadLocal<SearchStats> lastSearchStats = ThreadLocal.withInitial(SearchStats::notReady);
+
     public VPTree(VectorStore vectorStore) {
         this.vectorStore = vectorStore;
     }
@@ -92,6 +94,7 @@ public class VPTree {
      */
     public Neighbor[] findKNearest(float[] query, int k) {
         if (!isReady()) {
+            lastSearchStats.set(SearchStats.notReady());
             return new Neighbor[0];
         }
 
@@ -109,6 +112,7 @@ public class VPTree {
 
         float tau = Float.MAX_VALUE;
         int nodesVisited = 0;
+        boolean stackSaturated = false;
 
         while (stackPtr > 0 && nodesVisited < maxNodesToVisit && System.nanoTime() < deadlineNanos) {
             int nodeOffset = stack[--stackPtr];
@@ -120,10 +124,10 @@ public class VPTree {
             nodesVisited++;
 
             // Leitura do nó
-            int vpIndex        = buf.getInt(nodeOffset);
-            float threshold    = buf.getFloat(nodeOffset + 4);
-            int insideOffset   = buf.getInt(nodeOffset + 8);
-            int outsideOffset  = buf.getInt(nodeOffset + 12);
+            int vpIndex = buf.getInt(nodeOffset);
+            float threshold = buf.getFloat(nodeOffset + 4);
+            int insideOffset = buf.getInt(nodeOffset + 8);
+            int outsideOffset = buf.getInt(nodeOffset + 12);
 
             // Distância (squared) ao vantage point
             float distSq = vectorStore.squaredEuclideanDistance(vpIndex, query);
@@ -147,31 +151,51 @@ public class VPTree {
 
             // Poda usando regra do triângulo
             // sqrt é caro, mas necessário para poda correta
-            float sqrtDist      = (float) Math.sqrt(distSq);
+            float sqrtDist = (float) Math.sqrt(distSq);
             float sqrtThreshold = (float) Math.sqrt(threshold);
-            float sqrtTau       = (float) Math.sqrt(tau);
+            float sqrtTau = (float) Math.sqrt(tau);
 
             // Empilha nós a visitar (ordem importa: visitamos o primeiro empilhado por último)
             if (distSq < threshold) {
                 // Query dentro da esfera - inside é mais promissor
                 // Empilha outside primeiro (será visitado depois se necessário)
-                if (outsideOffset != OFFSET_NULL && sqrtDist + sqrtTau >= sqrtThreshold && stackPtr < stack.length) {
-                    stack[stackPtr++] = outsideOffset;
+                if (outsideOffset != OFFSET_NULL && sqrtDist + sqrtTau >= sqrtThreshold) {
+                    if (stackPtr < stack.length) {
+                        stack[stackPtr++] = outsideOffset;
+                    } else {
+                        stackSaturated = true;
+                    }
                 }
                 // Empilha inside (será visitado primeiro)
-                if (insideOffset != OFFSET_NULL && stackPtr < stack.length) {
-                    stack[stackPtr++] = insideOffset;
+                if (insideOffset != OFFSET_NULL) {
+                    if (stackPtr < stack.length) {
+                        stack[stackPtr++] = insideOffset;
+                    } else {
+                        stackSaturated = true;
+                    }
                 }
             } else {
                 // Query fora da esfera - outside é mais promissor
-                if (insideOffset != OFFSET_NULL && sqrtDist - sqrtTau <= sqrtThreshold && stackPtr < stack.length) {
-                    stack[stackPtr++] = insideOffset;
+                if (insideOffset != OFFSET_NULL && sqrtDist - sqrtTau <= sqrtThreshold) {
+                    if (stackPtr < stack.length) {
+                        stack[stackPtr++] = insideOffset;
+                    } else {
+                        stackSaturated = true;
+                    }
                 }
-                if (outsideOffset != OFFSET_NULL && stackPtr < stack.length) {
-                    stack[stackPtr++] = outsideOffset;
+                if (outsideOffset != OFFSET_NULL) {
+                    if (stackPtr < stack.length) {
+                        stack[stackPtr++] = outsideOffset;
+                    } else {
+                        stackSaturated = true;
+                    }
                 }
             }
         }
+
+        boolean nodeBudgetHit = nodesVisited >= maxNodesToVisit;
+        boolean timeBudgetHit = System.nanoTime() >= deadlineNanos;
+        lastSearchStats.set(new SearchStats(true, nodesVisited, nodeBudgetHit, timeBudgetHit, stackSaturated));
 
         // Converte heap para array ordenado por distância crescente
         Neighbor[] result = new Neighbor[heap.size()];
@@ -180,6 +204,10 @@ public class VPTree {
         }
 
         return result;
+    }
+
+    public SearchStats getLastSearchStats() {
+        return lastSearchStats.get();
     }
 
     /**
@@ -193,4 +221,20 @@ public class VPTree {
      * Representa um vizinho encontrado na busca
      */
     public record Neighbor(int index, float distance, boolean isFraud) {}
+
+    public record SearchStats(
+        boolean treeReady,
+        int nodesVisited,
+        boolean nodeBudgetHit,
+        boolean timeBudgetHit,
+        boolean stackSaturated
+    ) {
+        public static SearchStats notReady() {
+            return new SearchStats(false, 0, false, false, false);
+        }
+
+        public boolean budgetLimited() {
+            return nodeBudgetHit || timeBudgetHit || stackSaturated;
+        }
+    }
 }

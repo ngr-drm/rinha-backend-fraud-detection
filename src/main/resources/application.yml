@@ -41,6 +41,8 @@ app:
   runtime:
     # Limite de consultas KNN pesadas concorrentes por instância.
     max-concurrent-knn: 2
+    # Em produção de benchmark, evitar log por request.
+    metrics-log-every: 10000
   search:
     # Budget conservador para priorizar disponibilidade (reduz timeout no k6).
     max-nodes: 8000
