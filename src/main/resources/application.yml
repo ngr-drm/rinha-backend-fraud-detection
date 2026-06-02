@@ -24,9 +24,8 @@ server:
     threads:
       # io: 1 thread por núcleo é suficiente (0.45 vCPU compartilhada)
       io: 1
-      # worker: Com 0.45 vCPU e requests CPU-bound, muitas threads geram context switching.
-      # 8 workers é suficiente para absorver bursts sem saturar.
-      worker: 8
+      # Mais workers para absorver burst; bulkhead no controller limita KNN pesado.
+      worker: 16
     buffer-size: 1024
     direct-buffers: true
   # Compactação desabilitada (payload pequeno, custo de CPU não compensa)
@@ -39,9 +38,15 @@ app:
     vectors-path: /data/vectors.bin
     vptree-path: /data/vptree.bin
     mcc-risk-path: /data/mcc_risk.json
+  runtime:
+    # Limite de consultas KNN pesadas concorrentes por instância.
+    max-concurrent-knn: 2
+  search:
+    # Budget conservador para priorizar disponibilidade (reduz timeout no k6).
+    max-nodes: 8000
+    max-micros: 1200
 
 logging:
   level:
     root: WARN
     com.rb.fraud: INFO
-

@@ -37,11 +37,14 @@ public class VPTree {
     private static final int NODE_SIZE_BYTES = 16;
     private static final int OFFSET_NULL = -1;
 
-    // Limite de nós visitados para evitar timeout (busca aproximada se exceder)
-    private static final int MAX_NODES_TO_VISIT = 50_000;
-
     @Value("${app.data.vptree-path:/data/vptree.bin}")
     private String vptreePath;
+
+    @Value("${app.search.max-nodes:8000}")
+    private int maxNodesToVisit;
+
+    @Value("${app.search.max-micros:1200}")
+    private int maxSearchMicros;
 
     private final VectorStore vectorStore;
 
@@ -94,21 +97,20 @@ public class VPTree {
 
         final MappedByteBuffer buf = this.treeBuffer;
         final int maxOffset = nodeCount * NODE_SIZE_BYTES;
+        final long deadlineNanos = System.nanoTime() + (long) Math.max(100, maxSearchMicros) * 1000L;
 
         // Max-heap para manter os k mais próximos
         PriorityQueue<Neighbor> heap = new PriorityQueue<>(k, (a, b) -> Float.compare(b.distance, a.distance));
 
-        // Pilha explícita para busca iterativa (evita StackOverflow)
-        // Cada entrada: offset do nó a visitar
-        // 256 é suficiente mesmo com backtracking (log2(3M) ≈ 22 níveis, mas cada nível pode empilhar 2)
-        int[] stack = new int[256];
+        // Pilha maior + guarda de capacidade para evitar overflow em cenários de backtracking.
+        int[] stack = new int[1024];
         int stackPtr = 0;
         stack[stackPtr++] = 0; // Começa na raiz
 
         float tau = Float.MAX_VALUE;
         int nodesVisited = 0;
 
-        while (stackPtr > 0 && nodesVisited < MAX_NODES_TO_VISIT) {
+        while (stackPtr > 0 && nodesVisited < maxNodesToVisit && System.nanoTime() < deadlineNanos) {
             int nodeOffset = stack[--stackPtr];
 
             if (nodeOffset == OFFSET_NULL || nodeOffset < 0 || nodeOffset >= maxOffset) {
@@ -153,19 +155,19 @@ public class VPTree {
             if (distSq < threshold) {
                 // Query dentro da esfera - inside é mais promissor
                 // Empilha outside primeiro (será visitado depois se necessário)
-                if (outsideOffset != OFFSET_NULL && sqrtDist + sqrtTau >= sqrtThreshold) {
+                if (outsideOffset != OFFSET_NULL && sqrtDist + sqrtTau >= sqrtThreshold && stackPtr < stack.length) {
                     stack[stackPtr++] = outsideOffset;
                 }
                 // Empilha inside (será visitado primeiro)
-                if (insideOffset != OFFSET_NULL) {
+                if (insideOffset != OFFSET_NULL && stackPtr < stack.length) {
                     stack[stackPtr++] = insideOffset;
                 }
             } else {
                 // Query fora da esfera - outside é mais promissor
-                if (insideOffset != OFFSET_NULL && sqrtDist - sqrtTau <= sqrtThreshold) {
+                if (insideOffset != OFFSET_NULL && sqrtDist - sqrtTau <= sqrtThreshold && stackPtr < stack.length) {
                     stack[stackPtr++] = insideOffset;
                 }
-                if (outsideOffset != OFFSET_NULL) {
+                if (outsideOffset != OFFSET_NULL && stackPtr < stack.length) {
                     stack[stackPtr++] = outsideOffset;
                 }
             }
@@ -192,5 +194,3 @@ public class VPTree {
      */
     public record Neighbor(int index, float distance, boolean isFraud) {}
 }
-
-
