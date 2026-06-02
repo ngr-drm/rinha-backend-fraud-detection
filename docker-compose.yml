@@ -43,7 +43,9 @@ services:
       dockerfile: Dockerfile
     hostname: api1
     environment:
-      - JAVA_OPTS=-Xms64m -Xmx128m -XX:+UseG1GC -XX:MaxGCPauseMillis=10
+      # SerialGC é mais eficiente que G1 em heaps pequenos (<200MB)
+      # -XX:+TieredCompilation -XX:TieredStopAtLevel=1 acelera startup
+      - JAVA_OPTS=-Xms80m -Xmx120m -XX:+UseSerialGC -XX:+TieredCompilation -XX:TieredStopAtLevel=1
     deploy:
       resources:
         limits:
@@ -67,7 +69,9 @@ services:
       dockerfile: Dockerfile
     hostname: api2
     environment:
-      - JAVA_OPTS=-Xms64m -Xmx128m -XX:+UseG1GC -XX:MaxGCPauseMillis=10
+      # SerialGC é mais eficiente que G1 em heaps pequenos (<200MB)
+      # -XX:+TieredCompilation -XX:TieredStopAtLevel=1 acelera startup
+      - JAVA_OPTS=-Xms80m -Xmx120m -XX:+UseSerialGC -XX:+TieredCompilation -XX:TieredStopAtLevel=1
     deploy:
       resources:
         limits:

@@ -59,7 +59,9 @@ COPY --from=preprocess /data/vptree.bin /data/vptree.bin
 COPY resources/mcc_risk.json /data/mcc_risk.json
 
 # Configuração JVM otimizada para baixa memória
-ENV JAVA_OPTS="-Xms64m -Xmx128m -XX:+UseG1GC -XX:MaxGCPauseMillis=10 -XX:+UseStringDeduplication"
+# SerialGC é mais eficiente que G1 em heaps pequenos
+# TieredCompilation=1 acelera startup sacrificando otimização de longo prazo
+ENV JAVA_OPTS="-Xms80m -Xmx120m -XX:+UseSerialGC -XX:+TieredCompilation -XX:TieredStopAtLevel=1"
 
 EXPOSE 8080
 

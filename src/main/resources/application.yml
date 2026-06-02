@@ -22,12 +22,11 @@ server:
   # Undertow tuning para baixa latência
   undertow:
     threads:
-      # io: 1 thread por núcleo é suficiente (1 vCPU compartilhada)
-      io: 2
-      # worker pool dimensiona requests concorrentes processados pelo handler.
-      # Com worker=4 o k6 enfileira rapidamente e gera timeouts.
-      # 32 é seguro mesmo com 0.45 vCPU pois o handler é CPU-bound curto.
-      worker: 32
+      # io: 1 thread por núcleo é suficiente (0.45 vCPU compartilhada)
+      io: 1
+      # worker: Com 0.45 vCPU e requests CPU-bound, muitas threads geram context switching.
+      # 8 workers é suficiente para absorver bursts sem saturar.
+      worker: 8
     buffer-size: 1024
     direct-buffers: true
   # Compactação desabilitada (payload pequeno, custo de CPU não compensa)

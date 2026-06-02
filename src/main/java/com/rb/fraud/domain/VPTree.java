@@ -37,6 +37,9 @@ public class VPTree {
     private static final int NODE_SIZE_BYTES = 16;
     private static final int OFFSET_NULL = -1;
 
+    // Limite de nós visitados para evitar timeout (busca aproximada se exceder)
+    private static final int MAX_NODES_TO_VISIT = 50_000;
+
     @Value("${app.data.vptree-path:/data/vptree.bin}")
     private String vptreePath;
 
@@ -78,7 +81,7 @@ public class VPTree {
     }
 
     /**
-     * Busca os k vizinhos mais próximos usando a VP-Tree
+     * Busca os k vizinhos mais próximos usando a VP-Tree (ITERATIVO)
      *
      * @param query Vetor de consulta (14 dimensões)
      * @param k Número de vizinhos desejados
@@ -86,121 +89,89 @@ public class VPTree {
      */
     public Neighbor[] findKNearest(float[] query, int k) {
         if (!isReady()) {
-            // Fallback: brute force se árvore não carregada
-            return bruteForceKNN(query, k);
-        }
-
-        // Max-heap para manter os k mais próximos (ordenado por distância decrescente)
-        PriorityQueue<Neighbor> heap = new PriorityQueue<>(k, (a, b) -> Float.compare(b.distance, a.distance));
-
-        // Busca recursiva na árvore
-        searchNode(0, query, k, heap, Float.MAX_VALUE);
-
-        // Converte heap para array ordenado por distância crescente
-        Neighbor[] result = new Neighbor[heap.size()];
-        for (int i = result.length - 1; i >= 0; i--) {
-            result[i] = heap.poll();
-        }
-
-        return result;
-    }
-
-    /**
-     * Busca recursiva na VP-Tree
-     *
-     * Nota: Usamos squared euclidean distance internamente, mas o threshold
-     * foi calculado com squared distance no pré-processamento, então as
-     * comparações são consistentes.
-     */
-    private float searchNode(int nodeOffset, float[] query, int k, PriorityQueue<Neighbor> heap, float tau) {
-        if (nodeOffset == OFFSET_NULL || nodeOffset < 0 || nodeOffset >= nodeCount * NODE_SIZE_BYTES) {
-            return tau;
-        }
-
-        // Leitura absoluta do nó (zero-alocação, thread-safe)
-        final MappedByteBuffer buf = this.treeBuffer;
-        int vpIndex        = buf.getInt(nodeOffset);
-        float threshold    = buf.getFloat(nodeOffset + 4);   // squared distance
-        int insideOffset   = buf.getInt(nodeOffset + 8);
-        int outsideOffset  = buf.getInt(nodeOffset + 12);
-
-        // Distância (squared) ao vantage point
-        float distSq = vectorStore.squaredEuclideanDistance(vpIndex, query);
-
-        // Atualiza heap
-        if (heap.size() < k) {
-            heap.add(new Neighbor(vpIndex, distSq, vectorStore.isFraud(vpIndex)));
-            if (heap.size() == k) {
-                tau = heap.peek().distance;
-            }
-        } else if (distSq < tau) {
-            heap.poll();
-            heap.add(new Neighbor(vpIndex, distSq, vectorStore.isFraud(vpIndex)));
-            tau = heap.peek().distance;
-        }
-
-        // Folha
-        if (insideOffset == OFFSET_NULL && outsideOffset == OFFSET_NULL) {
-            return tau;
-        }
-
-        // Pré-calcula sqrts uma única vez (regra do triângulo em espaço euclidiano linear)
-        // Critério exato: |sqrt(distSq) - sqrt(threshold)| < sqrt(tau)  → visitar lado oposto
-        float sqrtDist      = (float) Math.sqrt(distSq);
-        float sqrtThreshold = (float) Math.sqrt(threshold);
-
-        if (distSq < threshold) {
-            // Visita inside primeiro
-            if (insideOffset != OFFSET_NULL) {
-                tau = searchNode(insideOffset, query, k, heap, tau);
-            }
-            // Re-avalia poda do outside com tau possivelmente reduzido
-            if (outsideOffset != OFFSET_NULL) {
-                float sqrtTau = (float) Math.sqrt(tau);
-                if (sqrtDist + sqrtTau >= sqrtThreshold) {
-                    tau = searchNode(outsideOffset, query, k, heap, tau);
-                }
-            }
-        } else {
-            // Visita outside primeiro
-            if (outsideOffset != OFFSET_NULL) {
-                tau = searchNode(outsideOffset, query, k, heap, tau);
-            }
-            if (insideOffset != OFFSET_NULL) {
-                float sqrtTau = (float) Math.sqrt(tau);
-                if (sqrtDist - sqrtTau <= sqrtThreshold) {
-                    tau = searchNode(insideOffset, query, k, heap, tau);
-                }
-            }
-        }
-
-        return tau;
-    }
-
-    /**
-     * Fallback: brute force k-NN quando árvore não está disponível
-     */
-    private Neighbor[] bruteForceKNN(float[] query, int k) {
-        if (!vectorStore.isReady()) {
             return new Neighbor[0];
         }
 
-        // Max-heap
+        final MappedByteBuffer buf = this.treeBuffer;
+        final int maxOffset = nodeCount * NODE_SIZE_BYTES;
+
+        // Max-heap para manter os k mais próximos
         PriorityQueue<Neighbor> heap = new PriorityQueue<>(k, (a, b) -> Float.compare(b.distance, a.distance));
 
-        int count = vectorStore.getVectorCount();
-        for (int i = 0; i < count; i++) {
-            float dist = vectorStore.squaredEuclideanDistance(i, query);
+        // Pilha explícita para busca iterativa (evita StackOverflow)
+        // Cada entrada: offset do nó a visitar
+        // 256 é suficiente mesmo com backtracking (log2(3M) ≈ 22 níveis, mas cada nível pode empilhar 2)
+        int[] stack = new int[256];
+        int stackPtr = 0;
+        stack[stackPtr++] = 0; // Começa na raiz
 
+        float tau = Float.MAX_VALUE;
+        int nodesVisited = 0;
+
+        while (stackPtr > 0 && nodesVisited < MAX_NODES_TO_VISIT) {
+            int nodeOffset = stack[--stackPtr];
+
+            if (nodeOffset == OFFSET_NULL || nodeOffset < 0 || nodeOffset >= maxOffset) {
+                continue;
+            }
+
+            nodesVisited++;
+
+            // Leitura do nó
+            int vpIndex        = buf.getInt(nodeOffset);
+            float threshold    = buf.getFloat(nodeOffset + 4);
+            int insideOffset   = buf.getInt(nodeOffset + 8);
+            int outsideOffset  = buf.getInt(nodeOffset + 12);
+
+            // Distância (squared) ao vantage point
+            float distSq = vectorStore.squaredEuclideanDistance(vpIndex, query);
+
+            // Atualiza heap
             if (heap.size() < k) {
-                heap.add(new Neighbor(i, dist, vectorStore.isFraud(i)));
-            } else if (dist < heap.peek().distance) {
+                heap.add(new Neighbor(vpIndex, distSq, vectorStore.isFraud(vpIndex)));
+                if (heap.size() == k) {
+                    tau = heap.peek().distance;
+                }
+            } else if (distSq < tau) {
                 heap.poll();
-                heap.add(new Neighbor(i, dist, vectorStore.isFraud(i)));
+                heap.add(new Neighbor(vpIndex, distSq, vectorStore.isFraud(vpIndex)));
+                tau = heap.peek().distance;
+            }
+
+            // Folha: continua para próximo nó na pilha
+            if (insideOffset == OFFSET_NULL && outsideOffset == OFFSET_NULL) {
+                continue;
+            }
+
+            // Poda usando regra do triângulo
+            // sqrt é caro, mas necessário para poda correta
+            float sqrtDist      = (float) Math.sqrt(distSq);
+            float sqrtThreshold = (float) Math.sqrt(threshold);
+            float sqrtTau       = (float) Math.sqrt(tau);
+
+            // Empilha nós a visitar (ordem importa: visitamos o primeiro empilhado por último)
+            if (distSq < threshold) {
+                // Query dentro da esfera - inside é mais promissor
+                // Empilha outside primeiro (será visitado depois se necessário)
+                if (outsideOffset != OFFSET_NULL && sqrtDist + sqrtTau >= sqrtThreshold) {
+                    stack[stackPtr++] = outsideOffset;
+                }
+                // Empilha inside (será visitado primeiro)
+                if (insideOffset != OFFSET_NULL) {
+                    stack[stackPtr++] = insideOffset;
+                }
+            } else {
+                // Query fora da esfera - outside é mais promissor
+                if (insideOffset != OFFSET_NULL && sqrtDist - sqrtTau <= sqrtThreshold) {
+                    stack[stackPtr++] = insideOffset;
+                }
+                if (outsideOffset != OFFSET_NULL) {
+                    stack[stackPtr++] = outsideOffset;
+                }
             }
         }
 
-        // Converte para array ordenado
+        // Converte heap para array ordenado por distância crescente
         Neighbor[] result = new Neighbor[heap.size()];
         for (int i = result.length - 1; i >= 0; i--) {
             result[i] = heap.poll();
