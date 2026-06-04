@@ -29,6 +29,11 @@ public class PreprocessVectors {
     private static final int NODE_SIZE_BYTES = 16;
     private static final int OFFSET_NULL = -1;
 
+    // Seleção de vantage point por amostragem (Proposta 2)
+    private static final int VP_RANDOM_FALLBACK_NODE_SIZE = 64;
+    private static final int VP_CANDIDATE_SAMPLE_SIZE = 16;
+    private static final int VP_EVAL_SAMPLE_SIZE = 64;
+
     public static void main(String[] args) throws Exception {
         if (args.length < 2) {
             System.out.println("Uso: java PreprocessVectors.java <input.json.gz> <output-dir>");
@@ -256,8 +261,8 @@ public class PreprocessVectors {
 
             // Primeira visita: calcular particao
             if (task.vpIndex == -1) {
-                // Escolhe vantage point (aleatorio para melhor balanceamento)
-                int vpLocalIdx = random.nextInt(task.indices.length);
+                // Escolhe vantage point por dispersão amostrada para melhorar poda da VP-Tree.
+                int vpLocalIdx = selectVantagePointByDispersionSample(records, task.indices, random);
                 task.vpIndex = task.indices[vpLocalIdx];
                 float[] vpVector = records.get(task.vpIndex).vector;
 
@@ -310,6 +315,76 @@ public class PreprocessVectors {
         }
 
         return results.get(rootTask);
+    }
+
+    private static int selectVantagePointByDispersionSample(List<VectorRecord> records, int[] indices, Random random) {
+        final int n = indices.length;
+        if (n <= 1) {
+            return 0;
+        }
+        if (n <= VP_RANDOM_FALLBACK_NODE_SIZE) {
+            return random.nextInt(n);
+        }
+
+        int candidateCount = Math.min(VP_CANDIDATE_SAMPLE_SIZE, n);
+        int evalCount = Math.min(VP_EVAL_SAMPLE_SIZE, n);
+
+        int[] candidatePos = sampleUniquePositions(n, candidateCount, random);
+        int[] evalPos = sampleUniquePositions(n, evalCount, random);
+
+        float bestScore = Float.NEGATIVE_INFINITY;
+        int bestLocalIdx = candidatePos[0];
+
+        for (int c = 0; c < candidateCount; c++) {
+            int candidateLocalIdx = candidatePos[c];
+            float[] candidateVector = records.get(indices[candidateLocalIdx]).vector;
+
+            float sum = 0f;
+            int used = 0;
+            for (int e = 0; e < evalCount; e++) {
+                int evalLocalIdx = evalPos[e];
+                if (evalLocalIdx == candidateLocalIdx) {
+                    continue;
+                }
+
+                float[] evalVector = records.get(indices[evalLocalIdx]).vector;
+                sum += squaredEuclideanDistance(candidateVector, evalVector);
+                used++;
+            }
+
+            if (used == 0) {
+                continue;
+            }
+
+            float meanDist = sum / used;
+            if (meanDist > bestScore) {
+                bestScore = meanDist;
+                bestLocalIdx = candidateLocalIdx;
+            }
+        }
+
+        return bestLocalIdx;
+    }
+
+    private static int[] sampleUniquePositions(int bound, int count, Random random) {
+        int[] out = new int[count];
+        int size = 0;
+
+        while (size < count) {
+            int p = random.nextInt(bound);
+            boolean exists = false;
+            for (int i = 0; i < size; i++) {
+                if (out[i] == p) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists) {
+                out[size++] = p;
+            }
+        }
+
+        return out;
     }
 
     private static float squaredEuclideanDistance(float[] a, float[] b) {
