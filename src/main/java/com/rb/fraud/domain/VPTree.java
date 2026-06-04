@@ -14,7 +14,6 @@ import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.PriorityQueue;
 
 /**
  * VP-Tree (Vantage-Point Tree) para busca k-NN exata
@@ -93,7 +92,7 @@ public class VPTree {
      * @return Array de k vizinhos mais próximos
      */
     public Neighbor[] findKNearest(float[] query, int k) {
-        if (!isReady()) {
+        if (!isReady() || k <= 0) {
             lastSearchStats.set(SearchStats.notReady());
             return new Neighbor[0];
         }
@@ -102,10 +101,12 @@ public class VPTree {
         final int maxOffset = nodeCount * NODE_SIZE_BYTES;
         final long deadlineNanos = System.nanoTime() + (long) Math.max(100, maxSearchMicros) * 1000L;
 
-        // Max-heap para manter os k mais próximos
-        PriorityQueue<Neighbor> heap = new PriorityQueue<>(k, (a, b) -> Float.compare(b.distance, a.distance));
+        // Top-k fixo para evitar alocação/comparador de PriorityQueue no hot path.
+        int[] topIndices = new int[k];
+        float[] topDistances = new float[k];
+        boolean[] topFraud = new boolean[k];
+        int topCount = 0;
 
-        // Pilha maior + guarda de capacidade para evitar overflow em cenários de backtracking.
         int[] stack = new int[1024];
         int stackPtr = 0;
         stack[stackPtr++] = 0; // Começa na raiz
@@ -132,16 +133,9 @@ public class VPTree {
             // Distância (squared) ao vantage point
             float distSq = vectorStore.squaredEuclideanDistance(vpIndex, query);
 
-            // Atualiza heap
-            if (heap.size() < k) {
-                heap.add(new Neighbor(vpIndex, distSq, vectorStore.isFraud(vpIndex)));
-                if (heap.size() == k) {
-                    tau = heap.peek().distance;
-                }
-            } else if (distSq < tau) {
-                heap.poll();
-                heap.add(new Neighbor(vpIndex, distSq, vectorStore.isFraud(vpIndex)));
-                tau = heap.peek().distance;
+            if (topCount < k || distSq < tau) {
+                topCount = insertNeighbor(topIndices, topDistances, topFraud, topCount, k, vpIndex, distSq, vectorStore.isFraud(vpIndex));
+                tau = topCount == k ? topDistances[k - 1] : Float.MAX_VALUE;
             }
 
             // Folha: continua para próximo nó na pilha
@@ -197,13 +191,48 @@ public class VPTree {
         boolean timeBudgetHit = System.nanoTime() >= deadlineNanos;
         lastSearchStats.set(new SearchStats(true, nodesVisited, nodeBudgetHit, timeBudgetHit, stackSaturated));
 
-        // Converte heap para array ordenado por distância crescente
-        Neighbor[] result = new Neighbor[heap.size()];
-        for (int i = result.length - 1; i >= 0; i--) {
-            result[i] = heap.poll();
+        // Converte top-k para array ordenado por distância crescente
+        Neighbor[] result = new Neighbor[topCount];
+        for (int i = 0; i < topCount; i++) {
+            result[i] = new Neighbor(topIndices[i], topDistances[i], topFraud[i]);
         }
 
         return result;
+    }
+
+    private static int insertNeighbor(
+        int[] topIndices,
+        float[] topDistances,
+        boolean[] topFraud,
+        int topCount,
+        int k,
+        int candidateIndex,
+        float candidateDistance,
+        boolean candidateFraud
+    ) {
+        int insertPos = topCount;
+        if (topCount < k) {
+            topCount++;
+        } else {
+            insertPos = k - 1;
+        }
+
+        while (insertPos > 0 && candidateDistance < topDistances[insertPos - 1]) {
+            if (insertPos < k) {
+                topDistances[insertPos] = topDistances[insertPos - 1];
+                topIndices[insertPos] = topIndices[insertPos - 1];
+                topFraud[insertPos] = topFraud[insertPos - 1];
+            }
+            insertPos--;
+        }
+
+        if (insertPos < k) {
+            topDistances[insertPos] = candidateDistance;
+            topIndices[insertPos] = candidateIndex;
+            topFraud[insertPos] = candidateFraud;
+        }
+
+        return topCount;
     }
 
     public SearchStats getLastSearchStats() {
