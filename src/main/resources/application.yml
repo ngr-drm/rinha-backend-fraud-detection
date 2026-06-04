@@ -45,8 +45,8 @@ app:
     metrics-log-every: 10000
   search:
     # Budget conservador para priorizar disponibilidade (reduz timeout no k6).
-    max-nodes: 8000
-    max-micros: 1200
+    max-nodes: 12000
+    max-micros: 900
 
 logging:
   level:
