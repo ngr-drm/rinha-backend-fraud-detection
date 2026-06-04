@@ -36,7 +36,7 @@ public class FraudScorer {
         }
 
         double fraudScore = (double) fraudCount / neighbors.length;
-        return FraudResponse.fromScore(fraudScore);
+        return FraudResponse.fromScore(THRESHOLD, fraudScore);
     }
 }
 

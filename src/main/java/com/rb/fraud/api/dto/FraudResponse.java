@@ -10,12 +10,13 @@ public record FraudResponse(
     boolean approved,
     @JsonProperty("fraud_score") double fraudScore
 ) {
+
     /**
      * Factory method que aplica a regra de decisão:
-     * approved = fraud_score < 0.6
+     * approved = fraud_score < threshold
      */
-    public static FraudResponse fromScore(double fraudScore) {
-        return new FraudResponse(fraudScore < 0.6, fraudScore);
+    public static FraudResponse fromScore(double threshold, double fraudScore) {
+        return new FraudResponse(fraudScore < threshold, fraudScore);
     }
 
     /**
