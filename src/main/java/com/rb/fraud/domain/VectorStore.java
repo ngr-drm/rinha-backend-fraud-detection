@@ -62,38 +62,6 @@ public class VectorStore {
     }
 
     /**
-     * Retorna o número total de vetores
-     */
-    public int getVectorCount() {
-        return vectorCount;
-    }
-
-    /**
-     * Lê o vetor no índice especificado
-     *
-     * @param index Índice do vetor (0-based)
-     * @return float[14] com os valores do vetor
-     */
-    public float[] getVector(int index) {
-        if (buffer == null) {
-            throw new IllegalStateException("VectorStore não inicializado");
-        }
-        if (index < 0 || index >= vectorCount) {
-            throw new IndexOutOfBoundsException("Índice " + index + " fora do range [0, " + vectorCount + ")");
-        }
-
-        float[] vector = new float[VECTOR_DIMENSIONS];
-        int offset = index * RECORD_SIZE_BYTES;
-
-        // Leitura absoluta thread-safe e zero-alocação (sem slice())
-        for (int i = 0; i < VECTOR_DIMENSIONS; i++) {
-            vector[i] = buffer.getFloat(offset + i * BYTES_PER_FLOAT);
-        }
-
-        return vector;
-    }
-
-    /**
      * Retorna o label do vetor (0 = legit, 1 = fraud)
      *
      * @param index Índice do vetor (0-based)
