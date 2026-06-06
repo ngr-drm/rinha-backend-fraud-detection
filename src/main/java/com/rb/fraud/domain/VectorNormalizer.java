@@ -10,8 +10,6 @@ import java.util.Map;
 
 /**
  * Normaliza payload JSON → float[14]
- * Conforme especificado em AGENTS.md seção 4
- *
  * Constantes de normalization.json:
  * - max_amount: 10000
  * - max_installments: 12

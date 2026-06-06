@@ -17,11 +17,8 @@ import java.nio.file.Path;
 
 /**
  * VP-Tree (Vantage-Point Tree) para busca k-NN exata
- * Conforme especificado em AGENTS.md seção 6
- *
  * A árvore é pré-construída no build do Docker e serializada em vptree.bin.
  * No startup, apenas carregamos via mmap e reconstruímos os ponteiros.
- *
  * Formato de serialização por nó (16 bytes):
  * - int32 vantagePointIndex
  * - float32 threshold

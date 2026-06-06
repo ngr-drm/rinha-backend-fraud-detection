@@ -15,12 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.LongAdder;
 
-/**
- * Controller para POST /fraud-score
- * Conforme especificado em AGENTS.md seção 3
- *
- * Fluxo: payload → normalizer → vptree (k=5) → scorer → response
- */
+
 @RestController
 public class FraudController {
 
@@ -78,18 +73,18 @@ public class FraudController {
                 knnBudgetLimited.increment();
             } else {
                 knnReadyFull.increment();
-            }
-
             // 4. Calcula score e decisão
+
+            // 4. Calculates score and decision
             maybeLogMetrics();
             return scorer.score(neighbors);
 
-        } catch (Exception e) {
             // Fallback para evitar HTTP 500 (peso 5 na pontuação)
             // Retorna approved=true com score 0.0
-            exceptionFallbacks.increment();
-            maybeLogMetrics();
+            // Returns approved=true with score 0.0
             log.error("Erro ao processar transação {}: {}", request.id(), e.getMessage());
+            maybeLogMetrics();
+            log.error("Error processing transaction {}: {}", request.id(), e.getMessage());
             return FraudResponse.fallback();
         } finally {
             knnSemaphore.release();

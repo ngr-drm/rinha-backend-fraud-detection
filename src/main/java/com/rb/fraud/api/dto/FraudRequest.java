@@ -3,10 +3,6 @@ package com.rb.fraud.api.dto;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 
-/**
- * DTO de entrada para POST /fraud-score
- * Conforme especificado em AGENTS.md seção 3
- */
 public record FraudRequest(
     String id,
     Transaction transaction,

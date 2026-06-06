@@ -2,10 +2,6 @@ package com.rb.fraud.api.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-/**
- * DTO de saída para POST /fraud-score
- * Conforme especificado em AGENTS.md seção 3
- */
 public record FraudResponse(
     boolean approved,
     @JsonProperty("fraud_score") double fraudScore

@@ -6,10 +6,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * Controller para health check /ready
- * Conforme especificado em AGENTS.md seção 3
- */
 @RestController
 public class ReadyController {
 

@@ -16,8 +16,6 @@ import java.nio.file.Path;
 
 /**
  * Armazena vetores de referência via memory-mapped file
- * Conforme especificado em AGENTS.md seção 5
- *
  * Formato binário (vectors.bin):
  * - Cada registro: float[14] (56 bytes) + byte label (1 byte) = 57 bytes
  * - Total: 3.000.000 × 57 = ~163 MB
