@@ -73,16 +73,16 @@ public class FraudController {
                 knnBudgetLimited.increment();
             } else {
                 knnReadyFull.increment();
-            // 4. Calcula score e decisão
+            }
 
             // 4. Calculates score and decision
             maybeLogMetrics();
             return scorer.score(neighbors);
 
-            // Fallback para evitar HTTP 500 (peso 5 na pontuação)
-            // Retorna approved=true com score 0.0
+        } catch (Exception e) {
+            // Fallback to avoid HTTP 500 (weight 5 in scoring)
             // Returns approved=true with score 0.0
-            log.error("Erro ao processar transação {}: {}", request.id(), e.getMessage());
+            exceptionFallbacks.increment();
             maybeLogMetrics();
             log.error("Error processing transaction {}: {}", request.id(), e.getMessage());
             return FraudResponse.fallback();
