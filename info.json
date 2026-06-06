@@ -1,7 +1,7 @@
 {
   "participants": ["Jean Pita"],
   "social": ["https://github.com/ngr-drm", "https://www.linkedin.com/in/re44e"],
-  "source-code-repo": "https://github.com/ngr-drm/fraud-detection.git",
+  "source-code-repo": "https://github.com/ngr-drm/fraud-detection",
   "stack": ["java", "spring-boot", "haproxy"],
   "open_to_work": true
 }
