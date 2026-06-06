@@ -39,9 +39,7 @@ services:
   # API Instance 1
   # ---------------------------------------------------------------------------
   api1:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: sure44e/fraud-detection:rinha-2026
     hostname: api1
     container_name: instance-1
     environment:
@@ -66,9 +64,7 @@ services:
   # API Instance 2
   # ---------------------------------------------------------------------------
   api2:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: sure44e/fraud-detection:rinha-2026
     hostname: api2
     container_name: instance-2
     environment:
